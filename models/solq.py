@@ -465,6 +465,7 @@ class PostProcess(nn.Module):
     def __init__(self, processor_dct=None):
         super().__init__()
         self.processor_dct = processor_dct
+        print('__init ',self.processor_dct)
 
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
@@ -523,12 +524,12 @@ class PostProcess(nn.Module):
                 )
                 outputs_masks_per_image = outputs_masks_per_image.unsqueeze(1).cpu()
                 masks.append(outputs_masks_per_image)
-
+        # print('dct : ',self.processor_dct)
         if self.processor_dct is None:
             results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
         else:
             results = [{'scores': s, 'labels': l, 'boxes': b, 'masks': m} for s, l, b, m in zip(scores, labels, boxes, masks)]
-
+        # print('debug post :',results[0].keys())
         return results
 
 
@@ -559,9 +560,10 @@ class MLP(nn.Module):
 
 
 def build(args):
-    num_classes = 20 if args.dataset_file != 'coco' else 91
-    if args.dataset_file == "coco_panoptic":
-        num_classes = 250
+    # num_classes = 20 if args.dataset_file != 'coco' else 91
+    # if args.dataset_file == "coco_panoptic":
+    #     num_classes = 250
+    num_classes = 27 
     device = torch.device(args.device)
 
     if 'swin' in args.backbone:
@@ -571,6 +573,7 @@ def build(args):
         backbone = build_backbone(args)
 
     transformer = build_deforamble_transformer(args) if not args.checkpoint else build_cp_deforamble_transformer(args)
+    # print('build    : ',args.with_vector)
     if args.with_vector:
         processor_dct = ProcessorDCT(args.n_keep, args.gt_mask_len)
     model = SOLQ(
@@ -611,12 +614,12 @@ def build(args):
                                                                         no_vector_loss_norm=args.no_vector_loss_norm,
                                                                         vector_start_stage=args.vector_start_stage)
     criterion.to(device)
-    postprocessors = {'bbox': PostProcess(processor_dct=processor_dct if (args.with_vector and args.eval) else None)}
+    postprocessors = {'bbox': PostProcess(processor_dct=processor_dct if (args.with_vector or args.eval) else None)}
 
-    if args.masks and args.eval:
+    if args.masks or args.eval:
         postprocessors['segm'] = PostProcessSegm(processor_dct=processor_dct if args.with_vector else None)
         if args.dataset_file == "coco_panoptic":
             is_thing_map = {i: i <= 90 for i in range(201)}
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
-
+    # print('debug : ',postprocessors.keys(),processor_dct)
     return model, criterion, postprocessors
