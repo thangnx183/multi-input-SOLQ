@@ -309,7 +309,11 @@ def get_sha():
 
 def collate_fn(batch):
     batch = list(zip(*batch))
-    batch[0] = nested_tensor_from_tensor_list(batch[0])
+    
+    imgs = [img for img,_ in batch[0]]
+    ref_imgs = sum([ref_img for _,ref_img in batch[0]],[])
+    
+    batch[0] = nested_tensor_from_tensor_list_v2(imgs,ref_imgs)
     return tuple(batch)
 
 
@@ -340,6 +344,42 @@ def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
     else:
         raise ValueError('not supported')
     return NestedTensor(tensor, mask)
+
+def nested_tensor_from_tensor_list_v2(tensor_list1: List[Tensor],tensor_list2: List[Tensor]):
+    if tensor_list1[0].ndim == 3 and  tensor_list2[0].ndim == 3:
+        # if torchvision._is_tracing():
+        #     # nested_tensor_from_tensor_list() does not export well to ONNX
+        #     # call _onnx_nested_tensor_from_tensor_list() instead
+        #     return _onnx_nested_tensor_from_tensor_list(tensor_list)
+
+        # TODO make it support different-sized images
+        max_size = _max_by_axis([list(img.shape) for img in tensor_list1+tensor_list2])
+        # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
+        batch_shape = [len(tensor_list1)] + max_size
+        b, c, h, w = batch_shape
+        dtype = tensor_list1[0].dtype
+        device = tensor_list1[0].device
+        tensor_img = torch.zeros(batch_shape, dtype=dtype, device=device)
+        mask_img = torch.ones((b, h, w), dtype=torch.bool, device=device)
+        for img, pad_img, m in zip(tensor_list1, tensor_img, mask_img):
+            # print('padding : ',pad_img.shape, img.shape,m.shape)
+            pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+            m[: img.shape[1], :img.shape[2]] = False
+
+        batch_shape = [len(tensor_list2)] + max_size
+        b, c, h, w = batch_shape
+        dtype = tensor_list2[0].dtype
+        device = tensor_list2[0].device
+        tensor_ref = torch.zeros(batch_shape, dtype=dtype, device=device)
+        mask_ref = torch.ones((b, h, w), dtype=torch.bool, device=device)
+        for img, pad_img, m in zip(tensor_list2, tensor_ref, mask_ref):
+            # print('padding : ',pad_img.shape, img.shape,m.shape)
+            pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+            m[: img.shape[1], :img.shape[2]] = False
+        
+    else:
+        raise ValueError('not supported')
+    return NestedTensor(tensor_img, mask_img),NestedTensor(tensor_ref, mask_ref)
 
 
 class NestedTensor(object):
