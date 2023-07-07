@@ -656,7 +656,8 @@ def build(args):
     # num_classes = 20 if args.dataset_file != 'coco' else 91
     # if args.dataset_file == "coco_panoptic":
     #     num_classes = 250
-    num_classes = 27
+    # num_classes = 27
+    num_classes = args.num_classes
     device = torch.device(args.device)
 
     if 'swin' in args.backbone:
