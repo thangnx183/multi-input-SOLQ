@@ -46,6 +46,10 @@ class DeformableTransformer(nn.Module):
         self.decoder = DeformableTransformerDecoder(decoder_layer, num_decoder_layers, return_intermediate_dec)
 
         self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
+        
+        self.cross_atten = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.norm_cross_atten = nn.LayerNorm(d_model)
+        self.drop_out_cross_atten = nn.Dropout(dropout)
 
         if two_stage:
             self.enc_output = nn.Linear(d_model, d_model)
@@ -126,10 +130,11 @@ class DeformableTransformer(nn.Module):
         valid_ratio_w = valid_W.float() / W
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
-
-    def forward(self, srcs, masks, pos_embeds, query_embed=None):
-        assert self.two_stage or query_embed is not None
-
+    
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
+    def prepare_encode(self,srcs,masks, pos_embeds):
         # prepare input for encoder
         src_flatten = []
         mask_flatten = []
@@ -153,8 +158,49 @@ class DeformableTransformer(nn.Module):
         level_start_index = torch.cat((spatial_shapes.new_zeros((1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
 
+        return src_flatten, spatial_shapes, level_start_index, valid_ratios,lvl_pos_embed_flatten, mask_flatten, bs, c, h, w
+
+    def forward(self, srcs, masks, pos_embeds,ref_srcs,ref_masks,ref_pos_embeds, query_embed=None):
+        assert self.two_stage or query_embed is not None
+
+        # prepare input for encoder
+        # src_flatten = []
+        # mask_flatten = []
+        # lvl_pos_embed_flatten = []
+        # spatial_shapes = []
+        # for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+        #     bs, c, h, w = src.shape
+        #     spatial_shape = (h, w)
+        #     spatial_shapes.append(spatial_shape)
+        #     src = src.flatten(2).transpose(1, 2)
+        #     mask = mask.flatten(1)
+        #     pos_embed = pos_embed.flatten(2).transpose(1, 2)
+        #     lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
+        #     lvl_pos_embed_flatten.append(lvl_pos_embed)
+        #     src_flatten.append(src)
+        #     mask_flatten.append(mask)
+        # src_flatten = torch.cat(src_flatten, 1)
+        # mask_flatten = torch.cat(mask_flatten, 1)
+        # lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
+        # spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
+        # level_start_index = torch.cat((spatial_shapes.new_zeros((1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        # valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
+
         # encoder
+        # memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
+        src_flatten, spatial_shapes, level_start_index, valid_ratios,lvl_pos_embed_flatten, mask_flatten, bs, c, h, w = self.prepare_encode(srcs,masks,pos_embeds)
+        ref_src_flatten, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios,ref_lvl_pos_embed_flatten, ref_mask_flatten, _, _ , _, _ = self.prepare_encode(ref_srcs,ref_masks,ref_pos_embeds)
+        
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
+        ref_memory = self.encoder(ref_src_flatten, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten)
+        
+        q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+        k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
+        
+        memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(0, 1), ref_memory.transpose(0, 1))[0].transpose(0, 1)
+        memory = memory + self.drop_out_cross_atten(memory_)
+        memory = self.norm_cross_atten(memory)
+        
         seg_memory, seg_mask = memory[:,level_start_index[-1]:,:], mask_flatten[:,level_start_index[-1]:]
         seg_memory = seg_memory.permute(0,2,1).view(bs,c,h,w)
         seg_mask = seg_mask.view(bs,h,w)

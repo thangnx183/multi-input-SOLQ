@@ -12,6 +12,12 @@ COCO dataset which returns image_id for evaluation.
 
 Mostly copy-paste from https://github.com/pytorch/vision/blob/13b35ff/references/detection/coco_utils.py
 """
+import os
+from PIL import Image
+import torchvision.transforms as T1
+import datasets.transforms as T
+from util.misc import get_local_rank, get_local_size
+from .torchvision_datasets import CocoDetection as TvCocoDetection
 from pathlib import Path
 
 import torch
@@ -19,9 +25,6 @@ import torch.utils.data
 from pycocotools import mask as coco_mask
 import functools
 print = functools.partial(print, flush=True)
-from .torchvision_datasets import CocoDetection as TvCocoDetection
-from util.misc import get_local_rank, get_local_size
-import datasets.transforms as T
 
 
 class CocoDetection(TvCocoDetection):
@@ -31,14 +34,35 @@ class CocoDetection(TvCocoDetection):
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
 
+        self.transform1 = T1.RandomPerspective(distortion_scale=0.6, p=0.8)
+        self.color_transform1 = T1.ColorJitter(brightness=0.1, contrast=0.03)
+
     def __getitem__(self, idx):
-        img, target = super(CocoDetection, self).__getitem__(idx)
+        # img, target = super(CocoDetection, self).__getitem__(idx)
+        coco = self.coco
         image_id = self.ids[idx]
+        ann_ids = coco.getAnnIds(imgIds=image_id)
+        target = coco.loadAnns(ann_ids)
+        file_name = coco.loadImgs(image_id)[0]['file_name']
+        origin_name = file_name.replace('_crop','')
+        
+        img = Image.open(os.path.join(self.root,file_name)).convert('RGB')
+        
+        ref_root = os.path.join(str(self.root).replace('crop','ref'),'')
+        
+        origin_img = Image.open(os.path.join(ref_root,origin_name)).convert('RGB')
+        origin_img = self.transform1(origin_img)
+        origin_img = self.color_transform1(origin_img)
+        
+        ref_imgs =[origin_img]
+        ref_imgs = [self._transforms(ref_img,None)[0] for ref_img in ref_imgs]
+        
+        
         target = {'image_id': image_id, 'annotations': target}
         img, target = self.prepare(img, target)
         if self._transforms is not None:
             img, target = self._transforms(img, target)
-        return img, target
+        return [img,ref_imgs], target
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
@@ -113,7 +137,8 @@ class ConvertCocoPolysToMask(object):
 
         # for conversion to coco api
         area = torch.tensor([obj["area"] for obj in anno])
-        iscrowd = torch.tensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in anno])
+        iscrowd = torch.tensor(
+            [obj["iscrowd"] if "iscrowd" in obj else 0 for obj in anno])
         target["area"] = area[keep]
         target["iscrowd"] = iscrowd[keep]
 
@@ -169,9 +194,9 @@ def build(image_set, args):
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
     PATHS = {
-        "train": (root , root  / 'train_clean.json'),
-        "val": (root , root  / 'valid_clean.json'),
-        'test': (root / "images", root  / 'test_clean.json'),
+        "train": (root, root / 'train_clean.json'),
+        "val": (root, root / 'valid_clean.json'),
+        'test': (root / "images", root / 'test_clean.json'),
     }
 
     if args.eval and args.test:

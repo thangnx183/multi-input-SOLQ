@@ -9,7 +9,13 @@ import functools
 print = functools.partial(print, flush=True)
 
 def to_cuda(samples, targets, device):
-    samples = samples.to(device, non_blocking=True)
+    if isinstance(samples,(list,tuple)):
+        samples = list(samples)
+        samples[0] = samples[0].to(device, non_blocking=True)
+        samples[1] = samples[1].to(device, non_blocking=True)
+        # samples = tuple(samples)
+    else:
+        samples = samples.to(device, non_blocking=True)
     targets = [{k: v.to(device, non_blocking=True) for k, v in t.items()} for t in targets]
     return samples, targets
 
@@ -56,7 +62,9 @@ class data_prefetcher():
             samples = self.next_samples
             targets = self.next_targets
             if samples is not None:
-                samples.record_stream(torch.cuda.current_stream())
+                # samples.record_stream(torch.cuda.current_stream())
+                samples[0].record_stream(torch.cuda.current_stream())
+                samples[1].record_stream(torch.cuda.current_stream())
             if targets is not None:
                 for t in targets:
                     for k, v in t.items():

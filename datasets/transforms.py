@@ -24,6 +24,9 @@ print = functools.partial(print, flush=True)
 
 def crop(image, target, region):
     cropped_image = F.crop(image, *region)
+    
+    if target is None:
+        return cropped_image, target
 
     target = target.copy()
     i, j, h, w = region
@@ -69,6 +72,9 @@ def hflip(image, target):
     flipped_image = F.hflip(image)
 
     w, h = image.size
+    
+    if target is None:
+        return flipped_image, target
 
     target = target.copy()
     if "boxes" in target:

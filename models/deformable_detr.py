@@ -27,9 +27,9 @@ from .segmentation import (DETRsegm, DeformableDETRsegm, PostProcessPanoptic, Po
                            dice_loss, sigmoid_focal_loss)
 from .deformable_transformer import build_deforamble_transformer
 import copy
-from detectron2.structures import BitMasks
-from detectron2.layers import paste_masks_in_image
-from detectron2.utils.memory import retry_if_cuda_oom
+# from detectron2.structures import BitMasks
+# from detectron2.layers import paste_masks_in_image
+# from detectron2.utils.memory import retry_if_cuda_oom
 import functools
 print = functools.partial(print, flush=True)
 
