@@ -182,60 +182,7 @@ class SOLQ(nn.Module):
 
         return srcs, masks, pos, features
 
-    def forward(self, samples: NestedTensor):
-        """ The forward expects a NestedTensor, which consists of:
-               - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
-               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
-
-            It returns a dict with the following elements:
-               - "pred_logits": the classification logits (including no-object) for all queries.
-                                Shape= [batch_size x num_queries x (num_classes + 1)]
-               - "pred_boxes": The normalized boxes coordinates for all queries, represented as
-                               (center_x, center_y, height, width). These values are normalized in [0, 1],
-                               relative to the size of each individual image (disregarding possible padding).
-                               See PostProcess for information on how to retrieve the unnormalized bounding box.
-               - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
-                                dictionnaries containing the two above keys for each decoder layer.
-        """
-        # if not isinstance(samples, NestedTensor):
-        #     samples = nested_tensor_from_tensor_list(samples)
-        # features, pos = self.backbone(samples)
-
-        # srcs = []
-        # masks = []
-        # for l, feat in enumerate(features):
-        #     src, mask = feat.decompose()
-        #     srcs.append(self.input_proj[l](src))
-        #     masks.append(mask)
-        #     assert mask is not None
-        # if self.num_feature_levels > len(srcs):
-        #     _len_srcs = len(srcs)
-        #     for l in range(_len_srcs, self.num_feature_levels):
-        #         if l == _len_srcs:
-        #             src = self.input_proj[l](features[-1].tensors)
-        #         else:
-        #             src = self.input_proj[l](srcs[-1])
-        #         m = samples.mask
-        #         mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
-        #         pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
-        #         srcs.append(src)
-        #         masks.append(mask)
-        #         pos.append(pos_l)
-
-        input_samples = samples[0]
-        ref_samples = samples[1]
-
-        input_srcs, input_masks, input_pos, _ = self.extract_backbone(
-            input_samples)
-        ref_srcs, ref_masks, ref_pos, _ = self.extract_backbone(ref_samples)
-
-        query_embeds = None
-        if not self.two_stage:
-            query_embeds = self.query_embed.weight
-            
-        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, _, _ = self.transformer(
-            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds)
-
+    def post_decode(self, hs, init_reference, inter_references):
         outputs_classes = []
         outputs_coords = []
         for lvl in range(hs.shape[0]):
@@ -268,15 +215,97 @@ class SOLQ(nn.Module):
                'pred_boxes': outputs_coord[-1]}
         if self.with_vector:
             out.update({'pred_vectors': outputs_vector[-1]})
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(
-                outputs_class, outputs_coord, outputs_vector)
 
-        if self.two_stage:
-            enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
-            out['enc_outputs'] = {
-                'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
         return out
+
+    def forward(self, samples, ref_inference=False):
+        """ The forward expects a NestedTensor, which consists of:
+               - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
+               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+
+            It returns a dict with the following elements:
+               - "pred_logits": the classification logits (including no-object) for all queries.
+                                Shape= [batch_size x num_queries x (num_classes + 1)]
+               - "pred_boxes": The normalized boxes coordinates for all queries, represented as
+                               (center_x, center_y, height, width). These values are normalized in [0, 1],
+                               relative to the size of each individual image (disregarding possible padding).
+                               See PostProcess for information on how to retrieve the unnormalized bounding box.
+               - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
+                                dictionnaries containing the two above keys for each decoder layer.
+        """
+        single_inference = False
+        if len(samples) == 1:
+            single_inference = True
+
+        input_samples = samples[0]
+        ref_samples = samples[1]
+
+        input_srcs, input_masks, input_pos, _ = self.extract_backbone(
+            input_samples)
+
+        if single_inference:
+            ref_srcs, ref_masks, ref_pos = None, None, None
+        else:
+            ref_srcs, ref_masks, ref_pos, _ = self.extract_backbone(
+                ref_samples)
+
+        query_embeds = None
+        if not self.two_stage:
+            query_embeds = self.query_embed.weight
+
+        hs, init_reference, inter_references, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
+            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference,ref_inference)
+
+        # print('debug hs ',[s.sum() for s in hs])
+
+        out = self.post_decode(hs, init_reference, inter_references)
+        
+        if ref_inference:
+            ref_out = self.post_decode(ref_hs, ref_init_reference, ref_inter_references)
+        else:
+            ref_out = None
+        # outputs_classes = []
+        # outputs_coords = []
+        # for lvl in range(hs.shape[0]):
+        #     if lvl == 0:
+        #         reference = init_reference
+        #     else:
+        #         reference = inter_references[lvl - 1]
+        #     reference = inverse_sigmoid(reference)
+        #     outputs_class = self.class_embed[lvl](hs[lvl])
+        #     tmp = self.bbox_embed[lvl](hs[lvl])
+        #     if reference.shape[-1] == 4:
+        #         tmp += reference
+        #     else:
+        #         assert reference.shape[-1] == 2
+        #         tmp[..., :2] += reference
+        #     outputs_coord = tmp.sigmoid()
+        #     outputs_classes.append(outputs_class)
+        #     outputs_coords.append(outputs_coord)
+        # outputs_class = torch.stack(outputs_classes)
+        # outputs_coord = torch.stack(outputs_coords)
+
+        # if self.with_vector:
+        #     outputs_vectors = []
+        #     for lvl in range(hs.shape[0]):
+        #         outputs_vector = self.vector_embed[lvl](hs[lvl])
+        #         outputs_vectors.append(outputs_vector)
+        #     outputs_vector = torch.stack(outputs_vectors)
+
+        # out = {'pred_logits': outputs_class[-1],
+        #        'pred_boxes': outputs_coord[-1]}
+        # if self.with_vector:
+        #     out.update({'pred_vectors': outputs_vector[-1]})
+
+        # if self.aux_loss:
+        #     out['aux_outputs'] = self._set_aux_loss(
+        #         outputs_class, outputs_coord, outputs_vector)
+
+        # if self.two_stage:
+        #     enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
+        #     out['enc_outputs'] = {
+        #         'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
+        return out,ref_out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_vector):
@@ -609,7 +638,7 @@ class PostProcess(nn.Module):
                     outputs_masks_per_image,  # N, 1, M, M
                     boxes[bi],
                     (img_h[bi], img_w[bi]),
-                    threshold=0.5,
+                    threshold=0.1,
                 )
                 outputs_masks_per_image = outputs_masks_per_image.unsqueeze(
                     1).cpu()
@@ -650,6 +679,44 @@ class MLP(nn.Module):
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
+
+
+def build_model(args):
+    num_classes = args.num_classes
+    # device = torch.device(args.device)
+
+    if 'swin' in args.backbone:
+        from .swin_transformer import build_swin_backbone
+        backbone = build_swin_backbone(args)
+    else:
+        backbone = build_backbone(args)
+
+    transformer = build_deforamble_transformer(
+        args) if not args.checkpoint else build_cp_deforamble_transformer(args)
+    if args.with_vector:
+        processor_dct = ProcessorDCT(args.n_keep, args.gt_mask_len)
+    model = SOLQ(
+        backbone,
+        transformer,
+        num_classes=num_classes,
+        num_queries=args.num_queries,
+        num_feature_levels=args.num_feature_levels,
+        aux_loss=args.aux_loss,
+        with_box_refine=args.with_box_refine,
+        two_stage=args.two_stage,
+        with_vector=args.with_vector,
+        processor_dct=processor_dct if args.with_vector else None,
+        vector_hidden_dim=args.vector_hidden_dim
+    )
+
+    postprocessors = {'bbox': PostProcess(
+        processor_dct=processor_dct if (args.with_vector or args.eval) else None)}
+
+    if args.masks or args.eval:
+        postprocessors['segm'] = PostProcessSegm(
+            processor_dct=processor_dct if args.with_vector else None)
+
+    return model, postprocessors
 
 
 def build(args):
