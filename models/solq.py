@@ -238,7 +238,6 @@ class SOLQ(nn.Module):
             single_inference = True
 
         input_samples = samples[0]
-        ref_samples = samples[1]
 
         input_srcs, input_masks, input_pos, _ = self.extract_backbone(
             input_samples)
@@ -246,6 +245,7 @@ class SOLQ(nn.Module):
         if single_inference:
             ref_srcs, ref_masks, ref_pos = None, None, None
         else:
+            ref_samples = samples[1]     
             ref_srcs, ref_masks, ref_pos, _ = self.extract_backbone(
                 ref_samples)
 
@@ -256,7 +256,6 @@ class SOLQ(nn.Module):
         hs, init_reference, inter_references, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
             input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference,ref_inference)
 
-        # print('debug hs ',[s.sum() for s in hs])
 
         out = self.post_decode(hs, init_reference, inter_references)
         

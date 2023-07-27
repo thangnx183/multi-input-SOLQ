@@ -25,6 +25,7 @@ from datasets.data_prefetcher import data_prefetcher
 import datasets.transforms as T
 from util.misc import nested_tensor_from_tensor_list_v2
 import cv2
+import time
 
 normalize = T.Compose([
     T.ToTensor(),
@@ -293,7 +294,6 @@ def single_inference(model, postprocessors, image, ref_image, device, thres, cat
 
 def solq_single_inference(model, postprocessors, image, ref_image, device, thres, cates=None):
     w, h = image.size
-    # mask = np.zeros((h, w)).astype(np.int32)
     size = torch.stack([torch.as_tensor([int(h), int(w)])], dim=0)
 
     input_tensor = [normalize(image, None)[0]]
@@ -304,10 +304,11 @@ def solq_single_inference(model, postprocessors, image, ref_image, device, thres
     input_nest_tensor = input_nest_tensor.to(device)
     ref_nest_tensor = ref_nest_tensor.to(device)
 
-    # import time
-
     # t1 = time.time()
     outputs, ref_outputs = model((input_nest_tensor, ref_nest_tensor),ref_inference=True)
+    # outputs, ref_outputs = model([input_nest_tensor],ref_inference=False)
+
+
 
     # t2 = time.time()
     # print('time infer alone ,', t2-t1)
@@ -329,37 +330,16 @@ def solq_single_inference(model, postprocessors, image, ref_image, device, thres
     boxes = boxes[idx].detach().cpu().numpy().astype(np.int32)
     masks = masks[idx].detach().cpu().numpy()
 
-    # print('time detach ,', time.time()-t3)
-
-    # image = np.array(image)
-    # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    # for score, label, box, mask in zip(scores, labels, boxes, masks):
-    #     box = box.astype(np.int32)
-    #     image = cv2.rectangle(image, tuple(
-    #         box[:2]), tuple(box[2:]), (255, 0, 0), 1)
-    #     if cates is not None:
-    #         image = cv2.putText(image, str(round(score, 2)) + '|' + cates[label], (
-    #             box[0], (box[3]+box[1])//2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
-
-    #     mask = np.squeeze(mask, axis=0).astype(np.uint8)
-    #     _, cons, _ = cv2.findContours(
-    #         mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    #     image = cv2.drawContours(image, cons, -1, (255, 0, 0), 2)
     if ref_outputs is not None:
         ref_w, ref_h = ref_image.size
         ref_size = torch.stack([torch.as_tensor([int(ref_h), int(ref_w)])], dim=0)
         ref_result = postprocessors['bbox'](ref_outputs,torch.as_tensor(ref_size).to(device))[0]
-        
-        
         
         ref_masks = ref_result['masks']
         ref_scores = ref_result['scores']
         ref_labels = ref_result['labels']
         ref_boxes = ref_result['boxes']
         
-        print('ref ',ref_scores)
-
         idx = ref_scores > thres
         ref_scores = ref_scores[idx].detach().cpu().numpy()
         ref_labels = ref_labels[idx].detach().cpu().numpy()
@@ -369,9 +349,5 @@ def solq_single_inference(model, postprocessors, image, ref_image, device, thres
         ref_out = {'scores': ref_scores, 'labels': ref_labels, 'boxes': ref_boxes, 'masks': [np.squeeze(m, axis=0).astype(np.uint8) for m in ref_masks]}
     else:
         ref_out = None
-
-
-    
-    
 
     return {'scores': scores, 'labels': labels, 'boxes': boxes, 'masks': [np.squeeze(m, axis=0).astype(np.uint8) for m in masks]}, ref_out
