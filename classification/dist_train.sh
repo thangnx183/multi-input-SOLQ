@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1,2 python dist_train.py
