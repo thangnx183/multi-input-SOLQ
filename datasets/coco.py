@@ -13,7 +13,10 @@ COCO dataset which returns image_id for evaluation.
 Mostly copy-paste from https://github.com/pytorch/vision/blob/13b35ff/references/detection/coco_utils.py
 """
 import os
-from PIL import Image
+from PIL import Image,ImageFile
+Image.MAX_IMAGE_PIXELS = None
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 import torchvision.transforms as T1
 import datasets.transforms as T
 from util.misc import get_local_rank, get_local_size
@@ -28,11 +31,12 @@ print = functools.partial(print, flush=True)
 
 
 class CocoDetection(TvCocoDetection):
-    def __init__(self, img_folder, ann_file, transforms, return_masks, cache_mode=False, local_rank=0, local_size=1):
+    def __init__(self, img_folder, ann_file, transforms, return_masks, cache_mode=False, local_rank=0, local_size=1,input_mode='multi'):
         super(CocoDetection, self).__init__(img_folder, ann_file,
                                             cache_mode=cache_mode, local_rank=local_rank, local_size=local_size)
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
+        self.input_mode = input_mode
 
         self.transform1 = T1.RandomPerspective(distortion_scale=0.6, p=0.8)
         self.color_transform1 = T1.ColorJitter(brightness=0.1, contrast=0.03)
@@ -47,22 +51,26 @@ class CocoDetection(TvCocoDetection):
         origin_name = file_name.replace('_crop','')
         
         img = Image.open(os.path.join(self.root,file_name)).convert('RGB')
-        
-        ref_root = os.path.join(str(self.root).replace('crop','ref'),'')
-        
-        origin_img = Image.open(os.path.join(ref_root,origin_name)).convert('RGB')
-        origin_img = self.transform1(origin_img)
-        origin_img = self.color_transform1(origin_img)
-        
-        ref_imgs =[origin_img]
-        ref_imgs = [self._transforms(ref_img,None)[0] for ref_img in ref_imgs]
-        
+
+        if self.input_mode == 'multi':
+            ref_root = os.path.join(str(self.root).replace('crop','ref'),'')
+            
+            origin_img = Image.open(os.path.join(ref_root,origin_name)).convert('RGB')
+            origin_img = self.transform1(origin_img)
+            origin_img = self.color_transform1(origin_img)
+            
+            ref_imgs =[origin_img]
+            ref_imgs = [self._transforms(ref_img,None)[0] for ref_img in ref_imgs]
         
         target = {'image_id': image_id, 'annotations': target}
         img, target = self.prepare(img, target)
         if self._transforms is not None:
             img, target = self._transforms(img, target)
-        return [img,ref_imgs], target
+        
+        if self.input_mode == 'multi':
+            return [img,ref_imgs], target
+        else:
+            return [img],target
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
@@ -161,14 +169,14 @@ def make_coco_transforms(image_set):
 
     if image_set == 'train':
         return T.Compose([
-            T.RandomHorizontalFlip(),
-            T.RandomResize(scales, max_size=1333),
+            # T.RandomHorizontalFlip(),
+            T.RandomResize(scales, max_size=1024),
             T.RandomSelect(
-                T.RandomResize(scales, max_size=1333),
+                T.RandomResize(scales, max_size=1024),
                 T.Compose([
                     T.RandomResize([400, 500, 600]),
                     T.RandomSizeCrop(384, 600),
-                    T.RandomResize(scales, max_size=1333),
+                    T.RandomResize(scales, max_size=1024),
                 ])
             ),
             normalize,
@@ -176,7 +184,7 @@ def make_coco_transforms(image_set):
 
     if image_set in ['val', 'test']:
         return T.Compose([
-            T.RandomResize([800], max_size=1333),
+            T.RandomResize([800], max_size=1024),
             normalize,
         ])
     # for Swin-L
@@ -193,16 +201,23 @@ def build(image_set, args):
     root = Path(args.coco_path)
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
-    PATHS = {
-        "train": (root, root / 'train.json'),
-        "val": (root, root / 'valid.json'),
-        'test': (root / "images", root / 'test.json'),
-    }
+    input_mode = args.input_mode
+    if input_mode == 'multi':
+        PATHS = {
+            "train": (root, root / 'train.json'),
+            "val": (root, root / 'valid.json'),
+            'test': (root / "images", root / 'test.json'),
+        }
+    else:
+        PATHS = {
+            'train': (root,root/'..'/'annotations_20222'/'train.json'),
+            'val': (root,root/'..'/'annotations_20222'/'valid.json'),
+        }
 
     if args.eval and args.test:
         print('Inference on test-dev.')
         image_set = 'test'
     img_folder, ann_file = PATHS[image_set]
     dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks,
-                            cache_mode=args.cache_mode, local_rank=get_local_rank(), local_size=get_local_size())
+                            cache_mode=args.cache_mode, local_rank=get_local_rank(), local_size=get_local_size(),input_mode=input_mode)
     return dataset

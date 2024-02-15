@@ -41,7 +41,7 @@ def get_args_parser():
     parser.add_argument('--lr_linear_proj_mult', default=0.1, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--epochs', default=60, type=int)
     parser.add_argument('--lr_drop', default=40, type=int)
     parser.add_argument('--save_period', default=10, type=int)
     parser.add_argument('--lr_drop_epochs', default=None, type=int, nargs='+')
@@ -174,6 +174,8 @@ def main(gpu, ngpus_per_node, args):
         os.environ['LOCAL_RANK'] = '0'
         os.environ['LOCAL_SIZE'] = '1'
         args.distributed = True
+        os.environ['NCCL_IB_GID_INDEX'] = '3'
+        os.environ['NCCL_BLOCKING_WAIT'] = '0'
 
         args.gpu = gpu
         if ngpus_per_node > 1:
@@ -208,10 +210,12 @@ def main(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         model = model.cuda()
 
-    # for n,p in model.named_parameters():
-    #     print('debug ',n,p.requires_grad)
-    #     if 'cross_atten' not in n :
-    #         p.requires_grad= False
+    for n,p in model.named_parameters():
+        print('debug ',n,p.requires_grad)
+        # if 'backbone' in n :
+        #     p.requires_grad= False
+        if 'vector_embed' not in n:
+            p.requires_grad= False
     
     # for n,p in model.named_parameters():
     #     print('debug ',n,p.requires_grad)
@@ -255,8 +259,9 @@ def main(gpu, ngpus_per_node, args):
                 break
         return out
 
-    # for n, p in model_without_ddp.named_parameters():
-    #     print(n)
+    for n, p in model_without_ddp.named_parameters():
+        if 'backbone' in n:
+            p.requires_grad = False
 
     param_dicts = [
         {
@@ -274,6 +279,18 @@ def main(gpu, ngpus_per_node, args):
             "lr": args.lr * args.lr_linear_proj_mult,
         }
     ]
+    param_dicts = [
+        {
+            "params":[p for n,p in model_without_ddp.named_parameters() if 'cross_atten' in n and p.requires_grad],
+            "lr": 1e-4
+        },
+        {
+            "params":[p for n,p in model_without_ddp.named_parameters() if 'cross_atten' not in n and p.requires_grad],
+            "lr": 2e-4
+        }
+    ]
+    
+    print(param_dicts)
     if args.sgd:
         optimizer = torch.optim.SGD(param_dicts, lr=args.lr, momentum=0.9,
                                     weight_decay=args.weight_decay)
@@ -333,10 +350,10 @@ def main(gpu, ngpus_per_node, args):
             lr_scheduler.step(lr_scheduler.last_epoch)
             args.start_epoch = checkpoint['epoch'] + 1
         # check the resumed model
-        if not args.eval:
-            test_stats, coco_evaluator = evaluate(
-                model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
-            )
+        # if not args.eval:
+        #     test_stats, coco_evaluator = evaluate(
+        #         model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+        #     )
     
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,

@@ -179,9 +179,10 @@ class FastSOLQ(nn.Module):
             masks = masks[-self.num_feature_levels:]
             pos = pos[-self.num_feature_levels:]
 
+        # print('len : ',len(srcs),len(masks))
         return srcs, masks, pos, features
 
-    def post_decode(self, hs, init_reference, inter_references):
+    def post_decode(self, hs, init_reference, inter_references, enc_outputs_class=None, enc_outputs_coord_unact=None):
         outputs_classes = []
         outputs_coords = []
         for lvl in range(hs.shape[0]):
@@ -214,6 +215,15 @@ class FastSOLQ(nn.Module):
                'pred_boxes': outputs_coord[-1]}
         if self.with_vector:
             out.update({'pred_vectors': outputs_vector[-1]})
+
+        if self.aux_loss:
+            out['aux_outputs'] = self._set_aux_loss(
+                outputs_class, outputs_coord, outputs_vector)
+
+        if self.two_stage:
+            enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
+            out['enc_outputs'] = {
+                'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
 
         return out
 
@@ -252,18 +262,30 @@ class FastSOLQ(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
 
-        hs, init_reference, inter_references, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
             input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference, ref_inference)
 
-        out = self.post_decode(hs, init_reference, inter_references)
+        out = self.post_decode(
+            hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact)
 
         if ref_inference:
             ref_out = self.post_decode(
-                ref_hs, ref_init_reference, ref_inter_references)
+                ref_hs, ref_init_reference, ref_inter_references, None, None)
         else:
             ref_out = None
 
-        return out, ref_out
+        # if not self.training and single_inference:
+        #     return out,None
+
+        # if self.training or single_inference:
+        #     return out
+
+        return out
+
+        # if self.training :
+        #     return out
+        # else:
+        #     return out, ref_out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_vector):
@@ -570,6 +592,8 @@ class PostProcess(nn.Module):
                     (img_h[bi], img_w[bi]),
                     threshold=0.5,
                 )
+                # outputs_masks_per_image = outputs_masks_per_image.unsqueeze(
+                #     1)
                 outputs_masks_per_image = outputs_masks_per_image.unsqueeze(
                     1).cpu()
                 masks.append(outputs_masks_per_image)

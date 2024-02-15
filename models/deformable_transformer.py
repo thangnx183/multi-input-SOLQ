@@ -55,6 +55,11 @@ class DeformableTransformer(nn.Module):
             d_model, nhead, dropout=dropout)
         self.norm_cross_atten = nn.LayerNorm(d_model)
         self.drop_out_cross_atten = nn.Dropout(dropout)
+        
+        # self.cross_atten2 = nn.MultiheadAttention(
+        #     d_model, nhead, dropout=dropout)
+        # self.norm_cross_atten2 = nn.LayerNorm(d_model)
+        # self.drop_out_cross_atten2 = nn.Dropout(dropout)
 
         if two_stage:
             self.enc_output = nn.Linear(d_model, d_model)
@@ -213,8 +218,8 @@ class DeformableTransformer(nn.Module):
 
         inter_references_out = inter_references
         if self.two_stage:
-            return hs, init_reference_out, inter_references_out
-        return hs, init_reference_out, inter_references_out
+            return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact
+        return hs, init_reference_out, inter_references_out,None,None
 
     def forward(self, srcs, masks, pos_embeds, ref_srcs, ref_masks, ref_pos_embeds, query_embed=None, single_inference=False, ref_inference=False):
         assert self.two_stage or query_embed is not None
@@ -238,17 +243,25 @@ class DeformableTransformer(nn.Module):
                 0, 1), ref_memory.transpose(0, 1))[0].transpose(0, 1)
             memory = memory + self.drop_out_cross_atten(memory_)
             memory = self.norm_cross_atten(memory)
+            
+            # q1 = k1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+            # # k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
 
-        hs, init_reference_out, inter_references_out = self.wrap_up_decoder(
+            # memory_ = self.cross_atten2(q1.transpose(0, 1), k1.transpose(
+            #     0, 1), memory.transpose(0, 1))[0].transpose(0, 1)
+            # memory = memory + self.drop_out_cross_atten2(memory_)
+            # memory = self.norm_cross_atten2(memory)
+
+        hs, init_reference_out, inter_references_out,enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
             memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed)
 
         if ref_inference:
-            ref_hs, ref_init_reference_out, ref_inter_references_out = self.wrap_up_decoder(
+            ref_hs, ref_init_reference_out, ref_inter_references_out,_,_ = self.wrap_up_decoder(
                 ref_memory, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_mask_flatten, query_embed)
         else:
             ref_hs, ref_init_reference_out, ref_inter_references_out = None, None, None
 
-        return hs, init_reference_out, inter_references_out, ref_hs, ref_init_reference_out, ref_inter_references_out
+        return hs, init_reference_out, inter_references_out,enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference_out, ref_inter_references_out
 
 
 class DeformableTransformerEncoderLayer(nn.Module):

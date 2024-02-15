@@ -316,6 +316,11 @@ def collate_fn(batch):
     batch[0] = nested_tensor_from_tensor_list_v2(imgs,ref_imgs)
     return tuple(batch)
 
+def collate_fn_single(batch):
+    batch = list(zip(*batch))
+    batch[0] = nested_tensor_from_tensor_list_v3([img[0] for img in batch[0]])
+    return tuple(batch)
+
 
 def _max_by_axis(the_list):
     # type: (List[List[int]]) -> List[int]
@@ -381,6 +386,24 @@ def nested_tensor_from_tensor_list_v2(tensor_list1: List[Tensor],tensor_list2: L
         raise ValueError('not supported')
     return NestedTensor(tensor_img, mask_img),NestedTensor(tensor_ref, mask_ref)
 
+def nested_tensor_from_tensor_list_v3(tensor_list: List[Tensor]):
+    # TODO make this more general
+    if tensor_list[0].ndim == 3:
+        # TODO make it support different-sized images
+        max_size = _max_by_axis([list(img.shape) for img in tensor_list])
+        # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
+        batch_shape = [len(tensor_list)] + max_size
+        b, c, h, w = batch_shape
+        dtype = tensor_list[0].dtype
+        device = tensor_list[0].device
+        tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
+        mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
+        for img, pad_img, m in zip(tensor_list, tensor, mask):
+            pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+            m[: img.shape[1], :img.shape[2]] = False
+    else:
+        raise ValueError('not supported')
+    return [NestedTensor(tensor, mask)]
 
 class NestedTensor(object):
     def __init__(self, tensors, mask: Optional[Tensor]):

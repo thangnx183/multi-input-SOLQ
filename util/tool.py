@@ -54,6 +54,7 @@ def load_model(model, model_path, optimizer=None, resume=False,
             print('Resumed optimizer with start lr', start_lr)
         else:
             print('No optimizer parameters in checkpoint.')
+    return model
     if optimizer is not None:
         return model, optimizer, start_epoch
     else:

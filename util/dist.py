@@ -6,6 +6,7 @@ import time
 import subprocess
 import torch
 from torch import distributed as dist
+import datetime
 import functools
 print = functools.partial(print, flush=True)
 
@@ -34,6 +35,7 @@ def init_process_group(args):
     dist.init_process_group(
         backend=args.dist_backend, init_method=args.dist_url, world_size=args.world_size, rank=args.rank
     )
+    # ,timeout=datetime.timedelta(seconds=72000 )
     print('Rank {} initialization finished.'.format(args.rank))
     synchronize()
 

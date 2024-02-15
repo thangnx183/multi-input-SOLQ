@@ -1,6 +1,6 @@
 # from datasets import build_dataset
 
-from mmdet.apis import inference_detector, init_detector, show_result_pyplot
+# from mmdet.apis import inference_detector, init_detector, show_result_pyplot
 import torch
 from engine import solq_single_inference
 # from models.deformable_detr import PostProcess
@@ -8,13 +8,13 @@ from PIL import Image
 import json
 from pathlib import Path
 import argparse
-from models.solq import build_model
+from models.fast_solq import build_model
 import numpy as np
 import cv2
 from util import box_ops
 from scipy.optimize import linear_sum_assignment
 import os
-# from segment_anything import sam_model_registry, SamPredictor
+# from segment_anything import sam_model_registry, SamPredictor 2.0.1+cu117
 import time
 
 global TOTAL_BOX
@@ -51,12 +51,16 @@ data = json.load(open('coco_data/carpart-side/crop/test.json'))
 data_path = Path('coco_data/carpart-side/crop')
 ref_data_path = Path('coco_data/carpart-side/ref')
 
-detr_path = 'checkpoints/video-side-carpart-side-ft.pth'
+detr_path = 'exps-optimal-scheduler-2/cp-side-50-cates-fdct-phase-3-opti-mask/checkpoint.pth'
 # maskrcnn_path = ['checkpoints/maskrcnn-cp/carpart_rear.py','checkpoints/maskrcnn-cp/epoch_29.pth']
 maskrcnn_path = ['checkpoints/carpart_20221030_configs.py',
                  'checkpoints/carpart_20221030_model.pth']
 # maskrcnn_path = ['checkpoints/maskrcnn-cp/carpart_20230302_configs.py','checkpoints/maskrcnn-cp/carpart_20230302_model.pth']
 
+# exps-optimal-scheduler/cp-side-50-cates-fdct-phase-4/checkpoint.pth
+# tp :  9401  fp :  1001  fn :  4193 precision :  0.9037685060565275  recall :  0.6915550978372811  f1 : 0.783547257875821
+# exps-optimal-scheduler/cp-side-50-cates-fdct-phase-3/checkpoint.pth
+# tp :  7840  fp :  1363  fn :  5754 precision :  0.8518961208301639  recall :  0.5767250257466529  f1 : 0.687809799534545
 
 def init_pair_model(pair_input_path, device):
     def get_args():
@@ -115,7 +119,7 @@ def init_pair_model(pair_input_path, device):
                             help="Type of positional embedding to use on top of the image features")
         parser.add_argument('--position_embedding_scale', default=2 * np.pi, type=float,
                             help="position / size * scale")
-        parser.add_argument('--num_feature_levels', default=1, type=int, help='number of feature levels')
+        parser.add_argument('--num_feature_levels', default=2, type=int, help='number of feature levels')
 
         # * Transformer
         parser.add_argument('--enc_layers', default=6, type=int,
@@ -143,7 +147,7 @@ def init_pair_model(pair_input_path, device):
         parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                             help="Disables auxiliary decoding losses (loss at each layer)")
 
-        args = parser.parse_args(['--with_box_refine','--two_stage','--masks','--num_classes','50','--with_vector','--vector_hidden_dim','256'])
+        args = parser.parse_args([ "--meta_arch", "fast_solq",'--with_box_refine','--two_stage','--masks','--num_classes','50','--with_vector','--vector_hidden_dim','512'])
         
         return args
 
@@ -193,7 +197,7 @@ def vis(image, result):
         elif CATEGORIES[l] == 'fbu+f':
             clr = [2550,0,255]
         
-        # print(CATEGORIES[l],c)
+        print(CATEGORIES[l],c)
         b = list(map(int, b))
         cv2.rectangle(draw_image, tuple(b[:2]), tuple(
             b[2:]), (102, 220, 225), thickness=2)
@@ -207,7 +211,7 @@ def vis(image, result):
 
         # print(m.shape)
         m = np.array(m).astype(np.uint8)
-        _, cons, _ = cv2.findContours(
+        cons, _ = cv2.findContours(
             m, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         draw_image = cv2.drawContours(draw_image, cons, -1, clr, 2)
 
@@ -231,9 +235,10 @@ def ensemble(pair_model, postprocess, sam_predictor, mask_model, images, thres, 
     # t1 = time.time()
     pair_result = pair_model_inference(
         pair_model, postprocess, images, device, thres)
-    
+    # print(pair_result)
     draw  = vis(np.array(images[0]),pair_result[0])
-    ref_draw = vis(np.array(images[1]),pair_result[1])
+    # ref_draw = vis(np.array(images[1]),pair_result[1])
+    ref_draw = np.array(images[1])
 
     # t2  = time.time()
     # print(' detr : ',t2-t1)
@@ -334,18 +339,23 @@ def evaluate_result(gt_boxes, gt_labels, result):
     pred_boxes = torch.as_tensor(result['boxes'])
 
     gt_boxes = box_ops.box_xywh_to_xyxy(torch.as_tensor(gt_boxes))
+    print('gt ',gt_boxes)
 
     if len(pred_boxes) == 0:
         return [], [], [i for i in range(len(gt_labels))]
     ious, _ = box_ops.box_iou(pred_boxes, gt_boxes)
 
     gt_labels = torch.as_tensor(gt_labels)
+    print(gt_labels,result['labels'])
     match_label = torch.stack(
         [gt_labels == i for i in result['labels']]).type(torch.LongTensor)
+    
+    print(match_label)
+    print(ious)
     cost = ious+match_label
     h, w = cost.shape
     row_ind, col_ind = matching(cost, pad_value=1)
-    # print(ious,row_ind,col_ind)
+    print(ious,row_ind,col_ind)
 
     tp, fp, fn = [], [], []
 
@@ -407,20 +417,22 @@ def main():
         # print(file_name) output_ensemble_side/fp/https:__generalide.motionscloud.com_rails_active_storage_blobs_eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBamppIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--9f5a53eda0f474f391bb65b5a1315c553f64d294_8CADBF91-351D-430F-B675-860813B5753E12_crop.jpeg
         # output_ensemble_side/fp/https:__s3.amazonaws.com_mc-ai_dataset_india_20190409_imgs_1255_DSC081291_crop.JPG
         # output_ensemble_side/fp/https:__s3.amazonaws.com_mc-ai_dataset_india_20190409_imgs_1043_DSCN387312_crop.JPG
-        if file_name != 'https:__generalide.motionscloud.com_rails_active_storage_blobs_eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBaGVsIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--72b71c72d7b2071f036f8e7a94160e0f434b7484_20210609_13355212_crop.jpg':
-            continue
+        # if file_name != 'https:__generalide.motionscloud.com_rails_active_storage_blobs_eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBaGVsIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--72b71c72d7b2071f036f8e7a94160e0f434b7484_20210609_13355212_crop.jpg':
+        #     continue
         ori_file_name = file_name.replace('_crop', '')
         image = Image.open(data_path/file_name).convert('RGB')
         ref_image = Image.open(ref_data_path/ori_file_name).convert('RGB')
 
-        image = Image.open('input/zoomin_time_1688356915411_reftime_1688356910826.jpg').convert('RGB')
-        ref_image = Image.open('input/ref_time_1688356910826.jpg').convert('RGB')
+        image = Image.open('input/longvideo_03012024/IMG_5376.mp4/input/zoomin_time_reftime_3.292209.jpg').convert('RGB')
+        ref_image = Image.open('input/longvideo_03012024/IMG_5376.mp4/input/ref_time_3.292209.jpg').convert('RGB')
 
         result, draw, check = ensemble(pair_model, postprocess, sam_predictor, mask_model, [
-                                       image, ref_image], thres=0.4, device=device)
+                                       image, ref_image], thres=0.3, device=device)
+        
+        # print(result)
 
         cv2.imwrite('demo_mask.jpg', draw[0])
-        cv2.imwrite('demo__ref_mask2.jpg', draw[1])
+        cv2.imwrite('demo_ref_mask2.jpg', draw[1])
 
         anos = [(a['bbox'], a['category_id'])
                 for a in data['annotations'] if a['image_id'] == img['id']]
@@ -465,7 +477,7 @@ def main():
         # print('fp : ',[CATEGORIES[result['labels'][i]] for i in fp])
         # print('fn : ',[CATEGORIES[gt_labels[i]] for i in fn])
 
-        # break
+        break
 
 
 if __name__ == '__main__':

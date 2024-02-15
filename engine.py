@@ -21,7 +21,7 @@ import torch
 import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
-from datasets.data_prefetcher import data_prefetcher
+from datasets.data_prefetcher import data_prefetcher, single_data_prefetcher
 import datasets.transforms as T
 from util.misc import nested_tensor_from_tensor_list_v2
 import cv2
@@ -40,7 +40,7 @@ normalize = T.Compose([
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+                    device: torch.device, epoch: int, max_norm: float = 0,input_mode='multi'):
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -53,7 +53,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
-    prefetcher = data_prefetcher(data_loader, device, prefetch=True)
+    if input_mode == 'multi':
+        prefetcher = data_prefetcher(data_loader, device, prefetch=True)
+    else:
+        prefetcher = single_data_prefetcher(data_loader, device, prefetch=True)
     samples, targets = prefetcher.next()
 
     # for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
@@ -114,7 +117,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
     iou_types = tuple(k for k in ('segm', 'bbox')
                       if k in postprocessors.keys())
-    coco_evaluator = CocoEvaluator(base_ds, iou_types)
+    iou_types = tuple(k for k in ('bbox',)
+                      if k in postprocessors.keys())
+    print('tupe iou ',iou_types)
+    # iou_types = tuple('bbox',)
+    # coco_evaluator = CocoEvaluator(base_ds, iou_types)
+    coco_evaluator = None
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
     panoptic_evaluator = None
@@ -126,13 +134,17 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         )
 
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
+        samples = list(samples)
         samples[0] = samples[0].to(device)
-        samples[1] = samples[1].to(device)
+        if len(samples) == 2:
+            samples[1] = samples[1].to(device)
 
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
+        t1 = time.time()
         outputs = model(samples)
+        t2 = time.time()
         loss_dict = criterion(outputs, targets)
+        t3 = time.time()
         weight_dict = criterion.weight_dict
 
         # reduce losses over all GPUs for logging purposes
@@ -146,17 +158,25 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                              **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
 
+        t4 = time.time()
+
         orig_target_sizes = torch.stack(
             [t["orig_size"] for t in targets], dim=0)
+        
         results = postprocessors['bbox'](outputs, orig_target_sizes)
+        t5 = time.time()
         if 'segm' in postprocessors.keys():
             target_sizes = torch.stack([t["size"] for t in targets], dim=0)
             results = postprocessors['segm'](
                 results, outputs, orig_target_sizes, target_sizes)
+        t6 = time.time()
         res = {target['image_id'].item(): output for target,
                output in zip(targets, results)}
         if coco_evaluator is not None:
             coco_evaluator.update(res)
+        t7 = time.time()
+
+        print('execute : ',t2-t1, ' loss cal : ',t3-t2,'log : ',t4-t3, 'post box',t5-t4,' post mask ',t6-t5,'coco update ',t7-t6)
 
         if panoptic_evaluator is not None:
             res_pano = postprocessors["panoptic"](
@@ -188,8 +208,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     if coco_evaluator is not None:
         if 'bbox' in postprocessors.keys():
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
-        if 'segm' in postprocessors.keys():
-            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+        # if 'segm' in postprocessors.keys():
+        #     stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
     if panoptic_res is not None:
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]
@@ -305,7 +325,7 @@ def solq_single_inference(model, postprocessors, image, ref_image, device, thres
     ref_nest_tensor = ref_nest_tensor.to(device)
 
     # t1 = time.time()
-    outputs, ref_outputs = model((input_nest_tensor, ref_nest_tensor),ref_inference=True)
+    outputs, ref_outputs = model((input_nest_tensor, ref_nest_tensor),ref_inference=False)
     # outputs, ref_outputs = model([input_nest_tensor],ref_inference=False)
 
 
@@ -325,6 +345,9 @@ def solq_single_inference(model, postprocessors, image, ref_image, device, thres
     boxes = result['boxes']
 
     idx = scores > thres
+    masks = masks.to(idx.device)
+    print(idx.device)
+    print(masks.device)
     scores = scores[idx].detach().cpu().numpy()
     labels = labels[idx].detach().cpu().numpy()
     boxes = boxes[idx].detach().cpu().numpy().astype(np.int32)
