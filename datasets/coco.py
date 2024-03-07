@@ -204,7 +204,7 @@ def build(image_set, args):
     input_mode = args.input_mode
     if input_mode == 'multi':
         PATHS = {
-            "train": (root, root / 'train.json'),
+            "train": (root, root / 'train_new.json'),
             "val": (root, root / 'valid.json'),
             'test': (root / "images", root / 'test.json'),
         }
@@ -218,6 +218,7 @@ def build(image_set, args):
         print('Inference on test-dev.')
         image_set = 'test'
     img_folder, ann_file = PATHS[image_set]
+    print(img_folder,ann_file)
     dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks,
                             cache_mode=args.cache_mode, local_rank=get_local_rank(), local_size=get_local_size(),input_mode=input_mode)
     return dataset

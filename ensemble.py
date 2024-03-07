@@ -47,11 +47,11 @@ mask_colors = [
     for _ in range(len(CATEGORIES))
 ]
 
-data = json.load(open('coco_data/carpart-side/crop/test.json'))
-data_path = Path('coco_data/carpart-side/crop')
-ref_data_path = Path('coco_data/carpart-side/ref')
+data = json.load(open('coco_data/carpart-side_v2/crop/valid_clean.json'))
+data_path = Path('coco_data/carpart-side_v2/crop')
+ref_data_path = Path('coco_data/carpart-side_v2/ref')
 
-detr_path = 'exps-optimal-scheduler-2/cp-side-50-cates-fdct-phase-3-opti-mask/checkpoint.pth'
+detr_path = 'exps-optimal-scheduler-3-e2e-opt-mask/phase-4-ema/multi-scale-optimal-scheduler-e2e-mask-ema.pth'
 # maskrcnn_path = ['checkpoints/maskrcnn-cp/carpart_rear.py','checkpoints/maskrcnn-cp/epoch_29.pth']
 maskrcnn_path = ['checkpoints/carpart_20221030_configs.py',
                  'checkpoints/carpart_20221030_model.pth']
@@ -154,7 +154,7 @@ def init_pair_model(pair_input_path, device):
     pair_model, postprocess = build_model(get_args())
     
     checkpoint = torch.load(pair_input_path, map_location='cpu')
-    out = pair_model.load_state_dict(checkpoint['model'], strict=True)
+    out = pair_model.load_state_dict(checkpoint['ema'], strict=True)
     print('loading ',out)
     pair_model = pair_model.to(device)
     pair_model.eval()
@@ -211,7 +211,7 @@ def vis(image, result):
 
         # print(m.shape)
         m = np.array(m).astype(np.uint8)
-        cons, _ = cv2.findContours(
+        _,cons, _ = cv2.findContours(
             m, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         draw_image = cv2.drawContours(draw_image, cons, -1, clr, 2)
 
@@ -339,23 +339,23 @@ def evaluate_result(gt_boxes, gt_labels, result):
     pred_boxes = torch.as_tensor(result['boxes'])
 
     gt_boxes = box_ops.box_xywh_to_xyxy(torch.as_tensor(gt_boxes))
-    print('gt ',gt_boxes)
+    # print('gt ',gt_boxes)
 
     if len(pred_boxes) == 0:
         return [], [], [i for i in range(len(gt_labels))]
     ious, _ = box_ops.box_iou(pred_boxes, gt_boxes)
 
     gt_labels = torch.as_tensor(gt_labels)
-    print(gt_labels,result['labels'])
+    # print(gt_labels,result['labels'])
     match_label = torch.stack(
         [gt_labels == i for i in result['labels']]).type(torch.LongTensor)
     
-    print(match_label)
-    print(ious)
+    # print(match_label)
+    # print(ious)
     cost = ious+match_label
     h, w = cost.shape
     row_ind, col_ind = matching(cost, pad_value=1)
-    print(ious,row_ind,col_ind)
+    # print(ious,row_ind,col_ind)
 
     tp, fp, fn = [], [], []
 
@@ -423,8 +423,8 @@ def main():
         image = Image.open(data_path/file_name).convert('RGB')
         ref_image = Image.open(ref_data_path/ori_file_name).convert('RGB')
 
-        image = Image.open('input/longvideo_03012024/IMG_5376.mp4/input/zoomin_time_reftime_3.292209.jpg').convert('RGB')
-        ref_image = Image.open('input/longvideo_03012024/IMG_5376.mp4/input/ref_time_3.292209.jpg').convert('RGB')
+        # image = Image.open('input/longvideo_03012024/IMG_5376.mp4/input/zoomin_time_reftime_3.292209.jpg').convert('RGB')
+        # ref_image = Image.open('input/longvideo_03012024/IMG_5376.mp4/input/ref_time_3.292209.jpg').convert('RGB')
 
         result, draw, check = ensemble(pair_model, postprocess, sam_predictor, mask_model, [
                                        image, ref_image], thres=0.3, device=device)
@@ -470,14 +470,14 @@ def main():
         f1 = 2*pre*rec/(pre+rec+1e-12)
         print('tp : ', total_tp, ' fp : ', total_fp, ' fn : ', total_fn, 'precision : ', pre,
               ' recall : ', rec, ' f1 :', f1, ' matching :', MATCHING_BOX, ' total box :', TOTAL_BOX)
-        cv2.imwrite(path+'/'+file_name, draw[0])
+        # cv2.imwrite(path+'/'+file_name, draw[0])
         # cv2.imwrite('demo_mask.jpg',draw)
 
         # print('tp : ',[CATEGORIES[result['labels'][i]] for i in tp])
         # print('fp : ',[CATEGORIES[result['labels'][i]] for i in fp])
         # print('fn : ',[CATEGORIES[gt_labels[i]] for i in fn])
 
-        break
+        # break
 
 
 if __name__ == '__main__':
