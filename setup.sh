@@ -1,0 +1,1 @@
+nvidia-docker run --name solq-thang --gpus all --shm-size=64g -p 1850:1850 -p 1851:1851 -it -v /data1/thang/SOLQ:/workspace -v /mnt/ssd1/thang/coco/datasets/:/workspace/coco_data  nvcr.io/nvidia/pytorch:21.08-py3
