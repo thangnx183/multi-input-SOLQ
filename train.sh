@@ -4,6 +4,7 @@
 # CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main.py --num_feature_levels 1 --coco_path carpart-side/crop --batch_size 8 --epochs 70 --lr_drop 50 --with_box_refine --two_stage --resume exps/video-side-cp/checkpoint0059.pth --output_dir exps/video-side-cp
 # CUDA_VISIBLE_DEVICES=2 python main.py --meta_arch solq --masks --coco_path coco_data/carpart --batch_size 4 --epochs 100 --lr_drop 80  --with_box_refine --two_stage --with_vector  --output_dir exps-mask/demo1
 
+# Phase 1 : single mode
 # CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main.py \
 #        --meta_arch fast_solq \
 #        --num_classes 50 \
@@ -14,13 +15,13 @@
 #        --batch_size 7 \
 #        --coco_path coco_data/carpart-lr/images  \
 #        --input_mode single \
-#        --resume exps-optimal-scheduler-2/cp-side-50-cates-fdct-phase-1/checkpoint.pth\
+#        --pretrain exps-optimal-scheduler-2/cp-side-50-cates-fdct-phase-1/checkpoint.pth\
 #        --vector_hidden_dim 256 \
 #        --vector_loss_coef 0.01 \
 #        --output_dir exps-optimal-scheduler-2/cp-side-50-cates-fdct-phase-1 \
 #        # --eval \
 
-
+# Phase 2 : multi mode
 # CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env main.py \
 #        --meta_arch fast_solq \
 #        --num_classes 50 \
@@ -84,6 +85,7 @@
 #        --vector_loss_coef 0.015 \
 #        --output_dir exps-optimal-scheduler-3-e2e-opt-mask/phase-1-single-mode \
 
+# Phase 2 : multi mode with ema
 CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main_ema.py \
        --meta_arch fast_solq \
        --num_classes 50 \
