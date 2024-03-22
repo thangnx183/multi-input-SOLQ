@@ -55,7 +55,7 @@ class DeformableTransformer(nn.Module):
             d_model, nhead, dropout=dropout)
         self.norm_cross_atten = nn.LayerNorm(d_model)
         self.drop_out_cross_atten = nn.Dropout(dropout)
-        
+
         # self.cross_atten2 = nn.MultiheadAttention(
         #     d_model, nhead, dropout=dropout)
         # self.norm_cross_atten2 = nn.LayerNorm(d_model)
@@ -219,9 +219,9 @@ class DeformableTransformer(nn.Module):
         inter_references_out = inter_references
         if self.two_stage:
             return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact
-        return hs, init_reference_out, inter_references_out,None,None
+        return hs, init_reference_out, inter_references_out, None, None
 
-    def forward(self, srcs, masks, pos_embeds, ref_srcs, ref_masks, ref_pos_embeds, query_embed=None, single_inference=False, ref_inference=False):
+    def forward(self, srcs, masks, pos_embeds, ref_srcs, ref_masks, ref_pos_embeds, query_embed=None, single_inference=False, ref_inference=False, cache_memory=None):
         assert self.two_stage or query_embed is not None
 
         # encoder
@@ -243,7 +243,24 @@ class DeformableTransformer(nn.Module):
                 0, 1), ref_memory.transpose(0, 1))[0].transpose(0, 1)
             memory = memory + self.drop_out_cross_atten(memory_)
             memory = self.norm_cross_atten(memory)
+
+            # cache_memory = [q1, self.with_pos_embed(
+            #     memory, lvl_pos_embed_flatten)]
+            cache_memory = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+            # cache_memory = memory
+        elif cache_memory is not None:
+
+            q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+            k1 = cache_memory
+
             
+            memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(
+                0, 1), cache_memory.transpose(0, 1))[0].transpose(0, 1)
+            memory = memory + 0.6*self.drop_out_cross_atten(memory_)
+            memory = self.norm_cross_atten(memory)
+
+            cache_memory = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+
             # q1 = k1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
             # # k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
 
@@ -252,16 +269,109 @@ class DeformableTransformer(nn.Module):
             # memory = memory + self.drop_out_cross_atten2(memory_)
             # memory = self.norm_cross_atten2(memory)
 
-        hs, init_reference_out, inter_references_out,enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
+        hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
             memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed)
 
+        # print('debug with cache old',q1.sum(),k1.sum(),hs.sum(),init_reference_out.sum(),inter_references_out.sum())
         if ref_inference:
-            ref_hs, ref_init_reference_out, ref_inter_references_out,_,_ = self.wrap_up_decoder(
+            ref_hs, ref_init_reference_out, ref_inter_references_out, _, _ = self.wrap_up_decoder(
                 ref_memory, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_mask_flatten, query_embed)
         else:
             ref_hs, ref_init_reference_out, ref_inter_references_out = None, None, None
 
-        return hs, init_reference_out, inter_references_out,enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference_out, ref_inter_references_out
+        return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference_out, ref_inter_references_out, cache_memory
+
+    def forward_without_transition(self, srcs, masks, pos_embeds, ref_srcs, ref_masks, ref_pos_embeds, query_embed=None):
+        assert self.two_stage or query_embed is not None
+
+        # encoder
+        src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten, bs, c, h, w = self.prepare_encode(
+            srcs, masks, pos_embeds)
+        memory = self.encoder(src_flatten, spatial_shapes, level_start_index,
+                              valid_ratios, lvl_pos_embed_flatten, mask_flatten)
+
+        ref_src_flatten, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten, _, _, _, _ = self.prepare_encode(
+            ref_srcs, ref_masks, ref_pos_embeds)
+        ref_memory = self.encoder(ref_src_flatten, ref_spatial_shapes, ref_level_start_index,
+                                    ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten)
+
+        q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+        k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
+        
+        ref_memory_output_add_pos = k1.clone().detach()
+        ref_memory_output = ref_memory.clone().detach()
+        # print('ori mem ',memory.sum(),q1.sum(),k1.sum(), ref_memory.sum())
+        
+        memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(
+            0, 1), ref_memory.transpose(0, 1))[0].transpose(0, 1)
+        # print(memory_.sum())
+        memory = memory + self.drop_out_cross_atten(memory_)
+        memory = self.norm_cross_atten(memory)
+
+        cache_memory_output = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+        
+        # print('debug without transition : ',ref_memory_output.sum(),memory.sum(),query_embed,q1.sum(),k1.sum())
+        hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
+            memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed)
+        
+        # print('debug without transition : ',ref_memory_output.sum(),memory.sum(),query_embed,hs.sum())
+
+
+        # ref_hs, ref_init_reference_out, ref_inter_references_out = None, None, None
+        # print('*'*200)
+
+
+        return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact,ref_memory_output,ref_memory_output_add_pos, cache_memory_output
+
+
+    def forward_with_transition_memory(self, srcs, masks, pos_embeds, query_embed=None, ref_memory=None, ref_memory_add_pos=None, transition_memory=None):
+        assert self.two_stage or query_embed is not None
+
+        # encoder
+        src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten, bs, c, h, w = self.prepare_encode(
+            srcs, masks, pos_embeds)
+        memory = self.encoder(src_flatten, spatial_shapes, level_start_index,
+                              valid_ratios, lvl_pos_embed_flatten, mask_flatten)
+
+        ori_memory = memory.clone().detach()
+        ori_query_embed = copy.deepcopy(query_embed)
+
+        # inference with transition memory cross attention
+        q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+        k1 = transition_memory
+        
+
+        memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(
+            0, 1), transition_memory.transpose(0, 1))[0].transpose(0, 1)
+        memory = memory + 0.6*self.drop_out_cross_atten(memory_)
+        memory = self.norm_cross_atten(memory)
+
+        # transition_memory = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+
+        hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
+            memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed)
+
+        # print('debug shortcut : ',q1.sum(),k1.sum(),hs.sum(),init_reference_out.sum(),inter_references_out.sum())
+
+        # inference with ref memory cross attention
+        q1 = self.with_pos_embed(ori_memory, lvl_pos_embed_flatten)
+        k1 = ref_memory_add_pos
+        # print('ori mem : ',ori_memory.sum(),q1.sum(),k1.sum(),ref_memory.sum())
+        memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(
+            0, 1), ref_memory.transpose(0, 1))[0].transpose(0, 1)
+        # print(memory_.sum())
+        memory = ori_memory + self.drop_out_cross_atten(memory_)
+        memory = self.norm_cross_atten(memory)
+
+        # print('debug with transition : ',ref_memory.sum(),memory.sum(),ori_query_embed,q1.sum(),k1.sum())
+        ref_hs, ref_init_reference_out, ref_inter_references_out, ref_enc_outputs_class, ref_enc_outputs_coord_unact = self.wrap_up_decoder(
+            memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, ori_query_embed)
+        # print('*'*200)
+        # print('debug with transition : ',ref_memory.sum(),memory.sum(),ori_query_embed, ref_hs.sum())
+
+
+        return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact,\
+            ref_hs, ref_init_reference_out, ref_inter_references_out, ref_enc_outputs_class, ref_enc_outputs_coord_unact
 
 
 class DeformableTransformerEncoderLayer(nn.Module):

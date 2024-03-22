@@ -227,7 +227,7 @@ class FastSOLQ(nn.Module):
 
         return out
 
-    def forward(self, samples, ref_inference=False):
+    def forward(self, samples, ref_inference=False, cache_memory=None):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -262,8 +262,8 @@ class FastSOLQ(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
 
-        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
-            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference, ref_inference)
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references, cache_memory = self.transformer(
+            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference, ref_inference, cache_memory)
 
         out = self.post_decode(
             hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact)
@@ -280,12 +280,76 @@ class FastSOLQ(nn.Module):
         # if self.training or single_inference:
         #     return out
 
-        return out
+        # return out
 
-        # if self.training :
-        #     return out
-        # else:
-        #     return out, ref_out
+        if self.training:
+            return out
+        else:
+            return out, ref_out, cache_memory
+
+    def forward_without_transition(self, samples):
+        """ The forward expects a NestedTensor, which consists of:
+               - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
+               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+
+            It returns a dict with the following elements:
+               - "pred_logits": the classification logits (including no-object) for all queries.
+                                Shape= [batch_size x num_queries x (num_classes + 1)]
+               - "pred_boxes": The normalized boxes coordinates for all queries, represented as
+                               (center_x, center_y, height, width). These values are normalized in [0, 1],
+                               relative to the size of each individual image (disregarding possible padding).
+                               See PostProcess for information on how to retrieve the unnormalized bounding box.
+               - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
+                                dictionnaries containing the two above keys for each decoder layer.
+        """
+        single_inference = False
+        if len(samples) == 1:
+            single_inference = True
+
+        input_samples = samples[0]
+
+        input_srcs, input_masks, input_pos, _ = self.extract_backbone(
+            input_samples)
+
+        if single_inference:
+            ref_srcs, ref_masks, ref_pos = None, None, None
+        else:
+            ref_samples = samples[1]
+            ref_srcs, ref_masks, ref_pos, _ = self.extract_backbone(
+                ref_samples)
+
+        query_embeds = None
+        if not self.two_stage:
+            query_embeds = self.query_embed.weight
+
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_memory, ref_memory_add_pos, transition_memory = self.transformer.forward_without_transition(
+            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds)
+
+        out = self.post_decode(
+            hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact)
+
+        return out, ref_memory, ref_memory_add_pos, transition_memory
+
+    def forward_with_transition_memory(self, samples, ref_momory, ref_memory_add_pos, transition_memory):
+        input_samples = samples[0]
+
+        input_srcs, input_masks, input_pos, _ = self.extract_backbone(
+            input_samples)
+
+        query_embeds = None
+        if not self.two_stage:
+            query_embeds = self.query_embed.weight
+
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references, ref_enc_outputs_class, ref_enc_outputs_coord_unact = self.transformer.forward_with_transition_memory(
+            input_srcs, input_masks, input_pos, query_embeds, ref_momory, ref_memory_add_pos, transition_memory)
+
+        out_with_transition_memory = self.post_decode(
+            hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact)
+
+        out_with_ref_memory = self.post_decode(
+            ref_hs, ref_init_reference, ref_inter_references, ref_enc_outputs_class, ref_enc_outputs_coord_unact)
+
+        return out_with_transition_memory, out_with_ref_memory
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_vector):
