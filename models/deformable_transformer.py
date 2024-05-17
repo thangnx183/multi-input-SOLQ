@@ -22,6 +22,21 @@ from models.ops.modules import MSDeformAttn
 import functools
 print = functools.partial(print, flush=True)
 
+class MLP(nn.Module):
+    """ Very simple multi-layer perceptron (also called FFN)"""
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super().__init__()
+        self.num_layers = num_layers
+        h = [hidden_dim] * (num_layers - 1)
+        self.layers = nn.ModuleList(nn.Linear(n, k)
+                                    for n, k in zip([input_dim] + h, h + [output_dim]))
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+        return x
+
 
 class DeformableTransformer(nn.Module):
     def __init__(self, d_model=256, nhead=8,
@@ -35,6 +50,9 @@ class DeformableTransformer(nn.Module):
         self.nhead = nhead
         self.two_stage = two_stage
         self.two_stage_num_proposals = two_stage_num_proposals
+        self.dim_feedforward = dim_feedforward
+        self.dropout = dropout
+        self.num_decoder_layers = num_decoder_layers
 
         encoder_layer = DeformableTransformerEncoderLayer(d_model, dim_feedforward,
                                                           dropout, activation,
@@ -51,11 +69,11 @@ class DeformableTransformer(nn.Module):
         self.level_embed = nn.Parameter(
             torch.Tensor(num_feature_levels, d_model))
 
-        self.cross_atten = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout)
-        self.norm_cross_atten = nn.LayerNorm(d_model)
-        self.drop_out_cross_atten = nn.Dropout(dropout)
-
+        # self.cross_atten = nn.MultiheadAttention(
+        #     d_model, nhead, dropout=dropout)
+        # self.norm_cross_atten = nn.LayerNorm(d_model)
+        # self.drop_out_cross_atten = nn.Dropout(dropout)
+        
         # self.cross_atten2 = nn.MultiheadAttention(
         #     d_model, nhead, dropout=dropout)
         # self.norm_cross_atten2 = nn.LayerNorm(d_model)
@@ -230,54 +248,19 @@ class DeformableTransformer(nn.Module):
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index,
                               valid_ratios, lvl_pos_embed_flatten, mask_flatten)
 
-        if not single_inference:
-            ref_src_flatten, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten, _, _, _, _ = self.prepare_encode(
-                ref_srcs, ref_masks, ref_pos_embeds)
-            ref_memory = self.encoder(ref_src_flatten, ref_spatial_shapes, ref_level_start_index,
-                                      ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten)
+        ref_src_flatten, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten, _, _, _, _ = self.prepare_encode(
+            ref_srcs, ref_masks, ref_pos_embeds)
+        ref_memory = self.encoder(ref_src_flatten, ref_spatial_shapes, ref_level_start_index,
+                                    ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten)
 
-            q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
-            k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
-
-            memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(
-                0, 1), ref_memory.transpose(0, 1))[0].transpose(0, 1)
-            memory = memory + self.drop_out_cross_atten(memory_)
-            memory = self.norm_cross_atten(memory)
-
-            # cache_memory = [q1, self.with_pos_embed(
-            #     memory, lvl_pos_embed_flatten)]
-            cache_memory = self.with_pos_embed(memory, lvl_pos_embed_flatten)
-            # cache_memory = memory
-        elif cache_memory is not None:
-
-            q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
-            k1 = cache_memory
-
-            
-            memory_ = self.cross_atten(q1.transpose(0, 1), k1.transpose(
-                0, 1), cache_memory.transpose(0, 1))[0].transpose(0, 1)
-            memory = memory + 0.6*self.drop_out_cross_atten(memory_)
-            memory = self.norm_cross_atten(memory)
-
-            cache_memory = self.with_pos_embed(memory, lvl_pos_embed_flatten)
-
-            # q1 = k1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
-            # # k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
-
-            # memory_ = self.cross_atten2(q1.transpose(0, 1), k1.transpose(
-            #     0, 1), memory.transpose(0, 1))[0].transpose(0, 1)
-            # memory = memory + self.drop_out_cross_atten2(memory_)
-            # memory = self.norm_cross_atten2(memory)
 
         hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
             memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed)
 
-        # print('debug with cache old',q1.sum(),k1.sum(),hs.sum(),init_reference_out.sum(),inter_references_out.sum())
-        if ref_inference:
-            ref_hs, ref_init_reference_out, ref_inter_references_out, _, _ = self.wrap_up_decoder(
-                ref_memory, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_mask_flatten, query_embed)
-        else:
-            ref_hs, ref_init_reference_out, ref_inter_references_out = None, None, None
+        ref_hs, ref_init_reference_out, ref_inter_references_out,_,_ = self.wrap_up_decoder(
+            ref_memory, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_mask_flatten, query_embed)
+        
+        # print('debug shape : ',hs.shape,ref_hs.shape)
 
         return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference_out, ref_inter_references_out, cache_memory
 

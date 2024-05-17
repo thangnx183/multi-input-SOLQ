@@ -4,3 +4,5 @@ cython
 scipy
 loguru
 torch-dct
+PyWavelets
+tensorboardX

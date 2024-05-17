@@ -27,13 +27,14 @@ from .backbone import build_backbone
 from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic,
                            dice_loss, sigmoid_focal_loss)
-from .deformable_transformer import build_deforamble_transformer
+from .deformable_transformer import build_deforamble_transformer, MLP
 from .dct_v2 import ProcessorDCT
 from detectron2.structures import BitMasks
 from detectron2.layers import paste_masks_in_image
 from detectron2.utils.memory import retry_if_cuda_oom
 import copy
 import functools
+from .tracker import ReferringTracker_noiser
 print = functools.partial(print, flush=True)
 
 
@@ -142,6 +143,10 @@ class FastSOLQ(nn.Module):
             self.transformer.decoder.class_embed = self.class_embed
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
+        
+        # print('hidden dim : ',hidden_dim,'feedforward_channel : ', self.transformer.dim_feedforward,' nhead : ',self.transformer.nhead, ' num decoder  : ',self.transformer.num_decoder_layers)
+        self.referring_tracker = ReferringTracker_noiser(hidden_channel=hidden_dim,feedforward_channel=self.transformer.dim_feedforward,
+                                                         num_head=self.transformer.nhead,decoder_layer_num=self.transformer.num_decoder_layers,noise_ratio=0.0)
 
     def extract_backbone(self, samples):
         features, pos = self.backbone(samples)
@@ -262,8 +267,10 @@ class FastSOLQ(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
 
-        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references, cache_memory = self.transformer(
-            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference, ref_inference, cache_memory)
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
+            input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference, ref_inference)
+        
+        hs = self.referring_tracker(ref_hs,hs)
 
         out = self.post_decode(
             hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact)
@@ -683,20 +690,20 @@ class PostProcessSegm(nn.Module):
         return results
 
 
-class MLP(nn.Module):
-    """ Very simple multi-layer perceptron (also called FFN)"""
+# class MLP(nn.Module):
+#     """ Very simple multi-layer perceptron (also called FFN)"""
 
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-        super().__init__()
-        self.num_layers = num_layers
-        h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList(nn.Linear(n, k)
-                                    for n, k in zip([input_dim] + h, h + [output_dim]))
+#     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+#         super().__init__()
+#         self.num_layers = num_layers
+#         h = [hidden_dim] * (num_layers - 1)
+#         self.layers = nn.ModuleList(nn.Linear(n, k)
+#                                     for n, k in zip([input_dim] + h, h + [output_dim]))
 
-    def forward(self, x):
-        for i, layer in enumerate(self.layers):
-            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
-        return x
+#     def forward(self, x):
+#         for i, layer in enumerate(self.layers):
+#             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+#         return x
 
 
 def build_model(args):
