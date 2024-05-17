@@ -86,19 +86,20 @@
 #        --output_dir exps-optimal-scheduler-3-e2e-opt-mask/phase-1-single-mode \
 
 # Phase 2 : multi mode with ema
-CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main_ema.py \
+
+CUDA_VISIBLE_DEVICES=1,3 python -m torch.distributed.launch --nproc_per_node=2 --use_env main_tracker.py \
        --meta_arch fast_solq \
        --num_classes 50 \
        --with_vector \
        --with_box_refine \
        --two_stage \
        --masks \
-       --batch_size 3 \
-       --epochs 30 \
-       --lr_drop 20 \
+       --batch_size 4 \
+       --epochs 70 \
+       --lr_drop 40 \
        --coco_path coco_data/carpart-side/crop  \
        --input_mode multi \
-       --pretrain exps-optimal-scheduler-3-e2e-opt-mask/phase-5-ema-no-random-crop/checkpoint0059.pth\
-       --vector_hidden_dim 512 \
-       --vector_loss_coef 0.035 \
-       --output_dir exps-optimal-scheduler-3-e2e-opt-mask/phase-6-ema-no-random-crop-old-dataset \
+       --pretrain checkpoint0049.pth\
+       --vector_hidden_dim 256 \
+       --vector_loss_coef 0.01 \
+       --output_dir exps-tracker/phase-4-with-noiser \
