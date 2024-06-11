@@ -85,21 +85,81 @@
 #        --vector_loss_coef 0.015 \
 #        --output_dir exps-optimal-scheduler-3-e2e-opt-mask/phase-1-single-mode \
 
-# Phase 2 : multi mode with ema
+# Phase 2 : multi mode with ema # --pretrain exps-tracker/phase-4-with-noiser/checkpoint0069.pth\
 
-CUDA_VISIBLE_DEVICES=1,3 python -m torch.distributed.launch --nproc_per_node=2 --use_env main_tracker.py \
+# CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main_tracker.py \
+#        --meta_arch fast_solq \
+#        --num_classes 50 \
+#        --with_vector \
+#        --with_box_refine \
+#        --two_stage \
+#        --masks \
+#        --batch_size 6 \
+#        --epochs 40 \
+#        --lr_drop 30 \
+#        --coco_path coco_data/carpart-side/crop  \
+#        --input_mode multi \
+#        --pretrain exps-tracker/phase-5-with-noiser-0-middle-at/checkpoint.pth \
+#        --vector_hidden_dim 512 \
+#        --vector_loss_coef 0.015 \
+#        --output_dir exps-tracker/phase-7-with-noiser-0-middle-at-opt-mask \
+
+
+# Phase 2 : multi mode duplicate pretrain mask
+# CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main_tracker.py \
+#        --meta_arch fast_solq \
+#        --num_classes 50 \
+#        --with_vector \
+#        --with_box_refine \
+#        --two_stage \
+#        --masks \
+#        --batch_size 5 \
+#        --epochs 25 \
+#        --lr_drop 15 \
+#        --coco_path  coco_data/carpart-lr/images  \
+#        --input_mode multi \
+#        --multi_mode_duplicate \
+#        --resume exps-tracker-opt-mask/phase-6-pretrain-stable-match/checkpoint.pth \
+#        --vector_hidden_dim 256 \
+#        --vector_loss_coef 0.015 \
+#        --output_dir exps-tracker-opt-mask/phase-6-pretrain-stable-match \
+
+
+# finetune mask
+CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.launch --nproc_per_node=3 --use_env main_tracker.py \
        --meta_arch fast_solq \
        --num_classes 50 \
        --with_vector \
        --with_box_refine \
        --two_stage \
        --masks \
-       --batch_size 4 \
-       --epochs 70 \
+       --batch_size 5 \
+       --epochs 50 \
        --lr_drop 40 \
-       --coco_path coco_data/carpart-side/crop  \
+       --coco_path  coco_data/carpart-side/crop \
        --input_mode multi \
-       --pretrain checkpoint0049.pth\
+       --resume exps-tracker-opt-mask/phase-7-finetune-mask-stable-match/checkpoint.pth \
        --vector_hidden_dim 256 \
-       --vector_loss_coef 0.01 \
-       --output_dir exps-tracker/phase-4-with-noiser \
+       --vector_loss_coef 0.015 \
+       --output_dir exps-tracker-opt-mask/phase-7-finetune-mask-stable-match \
+
+
+#eval
+# CUDA_VISIBLE_DEVICES=2 python -m torch.distributed.launch --nproc_per_node=1 --use_env main_tracker.py \
+#        --meta_arch fast_solq \
+#        --num_classes 50 \
+#        --with_vector \
+#        --with_box_refine \
+#        --two_stage \
+#        --masks \
+#        --batch_size 6 \
+#        --epochs 40 \
+#        --lr_drop 30 \
+#        --coco_path  coco_data/carpart-side/crop  \
+#        --eval \
+#        --input_mode multi \
+#        --pretrain exps-tracker-opt-mask/phase-2-finetune/checkpoint.pth \
+#        --vector_hidden_dim 256 \
+#        --vector_loss_coef 0.015 \
+#        --output_dir exps-tracker-opt-mask/phase-3-eval \
+

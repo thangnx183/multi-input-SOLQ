@@ -136,6 +136,7 @@ def get_args_parser():
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', default='./data/coco', type=str)
     parser.add_argument('--input_mode', default='multi', type=str)
+    parser.add_argument('--multi_mode_duplicate', default=False, action='store_true')
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
@@ -213,7 +214,7 @@ def main(gpu, ngpus_per_node, args):
     for n,p in model.named_parameters():
         # print('debug ',n,p.requires_grad)
         # if 'backbone' in n :
-        #     p.requires_grad= False
+        #     p.requires_grad= False  'referring_tracker','bbox_embed','class_embed','vector_embed','decoder'
         if any([i in n for i in ['referring_tracker','bbox_embed','class_embed','vector_embed','decoder']]):
             p.requires_grad= True
         else:
@@ -227,6 +228,7 @@ def main(gpu, ngpus_per_node, args):
     # return
 
     model_without_ddp = model
+    # torch.set_float32_matmul_precision('high')
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
@@ -270,22 +272,22 @@ def main(gpu, ngpus_per_node, args):
         if 'backbone' in n:
             p.requires_grad = False
 
-    param_dicts = [
-        {
-            "params":
-                [p for n, p in model_without_ddp.named_parameters()
-                 if not match_name_keywords(n, args.lr_backbone_names) and not match_name_keywords(n, args.lr_linear_proj_names) and p.requires_grad],
-            "lr": args.lr,
-        },
-        {
-            "params": [p for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_backbone_names) and p.requires_grad],
-            "lr": args.lr_backbone,
-        },
-        {
-            "params": [p for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_linear_proj_names) and p.requires_grad],
-            "lr": args.lr * args.lr_linear_proj_mult,
-        }
-    ]
+    # param_dicts = [
+    #     {
+    #         "params":
+    #             [p for n, p in model_without_ddp.named_parameters()
+    #              if not match_name_keywords(n, args.lr_backbone_names) and not match_name_keywords(n, args.lr_linear_proj_names) and p.requires_grad],
+    #         "lr": args.lr,
+    #     },
+    #     {
+    #         "params": [p for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_backbone_names) and p.requires_grad],
+    #         "lr": args.lr_backbone,
+    #     },
+    #     {
+    #         "params": [p for n, p in model_without_ddp.named_parameters() if match_name_keywords(n, args.lr_linear_proj_names) and p.requires_grad],
+    #         "lr": args.lr * args.lr_linear_proj_mult,
+    #     }
+    # ]
     param_dicts = [
         {
             "params":[p for n,p in model_without_ddp.named_parameters() if 'cross_atten' in n and p.requires_grad],
@@ -293,7 +295,7 @@ def main(gpu, ngpus_per_node, args):
         },
         {
             "params":[p for n,p in model_without_ddp.named_parameters() if 'cross_atten' not in n and p.requires_grad],
-            "lr": 2e-4
+            "lr": 5e-5
         }
     ]
     
@@ -365,6 +367,8 @@ def main(gpu, ngpus_per_node, args):
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
                                               data_loader_val, base_ds, device, args.output_dir)
+        
+        # print(test_stats)
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
             # here dump results in json format

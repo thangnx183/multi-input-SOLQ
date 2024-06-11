@@ -31,12 +31,13 @@ print = functools.partial(print, flush=True)
 
 
 class CocoDetection(TvCocoDetection):
-    def __init__(self, img_folder, ann_file, transforms, return_masks, cache_mode=False, local_rank=0, local_size=1,input_mode='multi'):
+    def __init__(self, img_folder, ann_file, transforms, return_masks, cache_mode=False, local_rank=0, local_size=1,input_mode='multi',duplicate=False):
         super(CocoDetection, self).__init__(img_folder, ann_file,
                                             cache_mode=cache_mode, local_rank=local_rank, local_size=local_size)
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
         self.input_mode = input_mode
+        self.duplicate = duplicate
 
         self.transform1 = T1.RandomPerspective(distortion_scale=0.6, p=0.8)
         self.color_transform1 = T1.ColorJitter(brightness=0.1, contrast=0.03)
@@ -51,26 +52,27 @@ class CocoDetection(TvCocoDetection):
         origin_name = file_name.replace('_crop','')
         
         img = Image.open(os.path.join(self.root,file_name)).convert('RGB')
-
-        if self.input_mode == 'multi':
-            ref_root = os.path.join(str(self.root).replace('crop','ref'),'')
-            
-            origin_img = Image.open(os.path.join(ref_root,origin_name)).convert('RGB')
-            origin_img = self.transform1(origin_img)
-            origin_img = self.color_transform1(origin_img)
-            
-            ref_imgs =[origin_img]
-            ref_imgs = [self._transforms(ref_img,None)[0] for ref_img in ref_imgs]
-        
         target = {'image_id': image_id, 'annotations': target}
         img, target = self.prepare(img, target)
         if self._transforms is not None:
             img, target = self._transforms(img, target)
-        
+
         if self.input_mode == 'multi':
-            return [img,ref_imgs], target
-        else:
-            return [img],target
+            if not self.duplicate:                
+                ref_root = os.path.join(str(self.root).replace('crop','ref'),'')
+                
+                origin_img = Image.open(os.path.join(ref_root,origin_name)).convert('RGB')
+                origin_img = self.transform1(origin_img)
+                origin_img = self.color_transform1(origin_img)
+                
+                ref_imgs =[origin_img]
+                ref_imgs = [self._transforms(ref_img,None)[0] for ref_img in ref_imgs]
+                
+                return [img,ref_imgs], target
+            else:
+                return [img,[img]],target
+        
+        return [img],target
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
@@ -202,10 +204,16 @@ def build(image_set, args):
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
     input_mode = args.input_mode
-    if input_mode == 'multi':
+    # print('debug multi ',args.multi_mode_duplicate)
+    if args.multi_mode_duplicate:
         PATHS = {
-            "train": (root, root / 'train_new.json'),
-            "val": (root, root / 'valid.json'),
+            'train': (root,root/'..'/'annotations_20222'/'train.json'),
+            'val': (root,root/'..'/'annotations_20222'/'valid.json'),
+        }
+    elif input_mode == 'multi':
+        PATHS = {
+            "train": (root, root / 'clean_train_new.json'),
+            "val": (root, root / 'clean_valid.json'),
             'test': (root / "images", root / 'test.json'),
         }
     else:
@@ -220,5 +228,5 @@ def build(image_set, args):
     img_folder, ann_file = PATHS[image_set]
     print(img_folder,ann_file)
     dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks,
-                            cache_mode=args.cache_mode, local_rank=get_local_rank(), local_size=get_local_size(),input_mode=input_mode)
+                            cache_mode=args.cache_mode, local_rank=get_local_rank(), local_size=get_local_size(),input_mode=input_mode,duplicate=args.multi_mode_duplicate)
     return dataset

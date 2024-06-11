@@ -43,6 +43,7 @@ class HungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
+        self.cec_beta = 0.5
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
 
     def forward(self, outputs, targets):
@@ -75,6 +76,20 @@ class HungarianMatcher(nn.Module):
             # Also concat the target labels and boxes
             tgt_ids = torch.cat([v["labels"] for v in targets])
             tgt_bbox = torch.cat([v["boxes"] for v in targets])
+            
+            giou = (generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox)) + 1) / 2
+            _s = out_prob
+            _u = torch.zeros_like(_s)
+            _u[:, tgt_ids] = giou
+            # scale max(giou) to 1
+            _uv = _u.view(bs, num_queries, -1)
+            _u_max = _uv.flatten(1, 2).max(-1)[0]
+            scalar = (1 / (_u_max + 1e-8))
+            scalar = torch.max(scalar, torch.ones_like(scalar))
+            _uv = _uv * scalar[:, None, None]
+            _u = _uv.view(bs * num_queries, -1)
+            # 
+            out_prob = (_s * _u.pow(self.cec_beta))
 
             # Compute the classification cost.
             alpha = 0.25
@@ -92,6 +107,8 @@ class HungarianMatcher(nn.Module):
 
             # Final cost matrix
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+            
+            C[C.isnan() | C.isinf()] = 0.0
             C = C.view(bs, num_queries, -1).cpu()
 
             sizes = [len(v["boxes"]) for v in targets]
