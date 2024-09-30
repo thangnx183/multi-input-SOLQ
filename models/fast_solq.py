@@ -125,6 +125,7 @@ class FastSOLQ(nn.Module):
                 self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
             self.transformer.decoder.bbox_embed = self.bbox_embed
+            self.transformer.ref_decoder.bbox_embed = self.bbox_embed
         else:
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             self.class_embed = nn.ModuleList(
@@ -132,6 +133,7 @@ class FastSOLQ(nn.Module):
             self.bbox_embed = nn.ModuleList(
                 [self.bbox_embed for _ in range(num_pred)])
             self.transformer.decoder.bbox_embed = None
+            self.transformer.ref_decoder.bbox_embed = None
 
         if self.with_vector:
             nn.init.constant_(self.vector_embed.layers[-1].bias.data[2:], -2.0)
@@ -141,6 +143,7 @@ class FastSOLQ(nn.Module):
         if two_stage:
             # hack implementation for two-stage
             self.transformer.decoder.class_embed = self.class_embed
+            self.transformer.ref_decoder.class_embed = self.class_embed
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
         
@@ -267,7 +270,7 @@ class FastSOLQ(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
 
-        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references = self.transformer(
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference, ref_inter_references, attention_map = self.transformer(
             input_srcs, input_masks, input_pos, ref_srcs, ref_masks, ref_pos, query_embeds, single_inference, ref_inference)
         
         hs = self.referring_tracker(ref_hs,hs)
@@ -287,7 +290,7 @@ class FastSOLQ(nn.Module):
         # if self.training or single_inference:
         #     return out
 
-        # return out
+        return out
 
         if self.training:
             return out

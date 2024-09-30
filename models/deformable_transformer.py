@@ -65,14 +65,16 @@ class DeformableTransformer(nn.Module):
                                                           num_feature_levels, nhead, dec_n_points)
         self.decoder = DeformableTransformerDecoder(
             decoder_layer, num_decoder_layers, return_intermediate_dec)
+        
+        self.ref_decoder = copy.deepcopy(self.decoder)
 
         self.level_embed = nn.Parameter(
             torch.Tensor(num_feature_levels, d_model))
 
-        # self.cross_atten = nn.MultiheadAttention(
-        #     d_model, nhead, dropout=dropout)
-        # self.norm_cross_atten = nn.LayerNorm(d_model)
-        # self.drop_out_cross_atten = nn.Dropout(dropout)
+        self.cross_atten = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout)
+        self.norm_cross_atten = nn.LayerNorm(d_model)
+        self.drop_out_cross_atten = nn.Dropout(dropout)
         
         # self.cross_atten2 = nn.MultiheadAttention(
         #     d_model, nhead, dropout=dropout)
@@ -238,6 +240,46 @@ class DeformableTransformer(nn.Module):
         if self.two_stage:
             return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact
         return hs, init_reference_out, inter_references_out, None, None
+    
+    def wrap_up_ref_decoder(self, memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed):
+        # prepare input for decoder
+        bs, _, c = memory.shape
+        if self.two_stage:
+            output_memory, output_proposals = self.gen_encoder_output_proposals(
+                memory, mask_flatten, spatial_shapes)
+
+            # hack implementation for two-stage Deformable DETR
+            enc_outputs_class = self.ref_decoder.class_embed[self.ref_decoder.num_layers](
+                output_memory)
+            enc_outputs_coord_unact = self.ref_decoder.bbox_embed[self.ref_decoder.num_layers](
+                output_memory) + output_proposals
+
+            topk = self.two_stage_num_proposals
+            topk_proposals = torch.topk(
+                enc_outputs_class[..., 0], topk, dim=1)[1]
+            topk_coords_unact = torch.gather(
+                enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
+            topk_coords_unact = topk_coords_unact.detach()
+            reference_points = topk_coords_unact.sigmoid()
+            init_reference_out = reference_points
+            pos_trans_out = self.pos_trans_norm(self.pos_trans(
+                self.get_proposal_pos_embed(topk_coords_unact)))
+            query_embed, tgt = torch.split(pos_trans_out, c, dim=2)
+        else:
+            query_embed, tgt = torch.split(query_embed, c, dim=1)
+            query_embed = query_embed.unsqueeze(0).expand(bs, -1, -1)
+            tgt = tgt.unsqueeze(0).expand(bs, -1, -1)
+            reference_points = self.reference_points(query_embed).sigmoid()
+            init_reference_out = reference_points
+
+        # ref_decoder
+        hs, inter_references = self.ref_decoder(tgt, reference_points, memory,
+                                            spatial_shapes, level_start_index, valid_ratios, query_embed, mask_flatten)
+
+        inter_references_out = inter_references
+        if self.two_stage:
+            return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact
+        return hs, init_reference_out, inter_references_out, None, None
 
     def forward(self, srcs, masks, pos_embeds, ref_srcs, ref_masks, ref_pos_embeds, query_embed=None, single_inference=False, ref_inference=False, cache_memory=None):
         assert self.two_stage or query_embed is not None
@@ -252,17 +294,28 @@ class DeformableTransformer(nn.Module):
             ref_srcs, ref_masks, ref_pos_embeds)
         ref_memory = self.encoder(ref_src_flatten, ref_spatial_shapes, ref_level_start_index,
                                     ref_valid_ratios, ref_lvl_pos_embed_flatten, ref_mask_flatten)
+        
+        q1 = self.with_pos_embed(memory, lvl_pos_embed_flatten)
+        k1 = self.with_pos_embed(ref_memory, ref_lvl_pos_embed_flatten)
+
+        memory_, attention_map = self.cross_atten(q1.transpose(0, 1), k1.transpose(
+            0, 1), ref_memory.transpose(0, 1))
+        memory_ = memory_.transpose(0, 1)
+        # attention_map = attention_map
+        
+        memory = memory + self.drop_out_cross_atten(memory_)
+        memory = self.norm_cross_atten(memory)
 
 
         hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact = self.wrap_up_decoder(
             memory, spatial_shapes, level_start_index, valid_ratios, mask_flatten, query_embed)
 
-        ref_hs, ref_init_reference_out, ref_inter_references_out,_,_ = self.wrap_up_decoder(
+        ref_hs, ref_init_reference_out, ref_inter_references_out,_,_ = self.wrap_up_ref_decoder(
             ref_memory, ref_spatial_shapes, ref_level_start_index, ref_valid_ratios, ref_mask_flatten, query_embed)
         
         # print('debug shape : ',hs.shape,ref_hs.shape)
 
-        return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference_out, ref_inter_references_out, cache_memory
+        return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, ref_hs, ref_init_reference_out, ref_inter_references_out, attention_map
 
     def forward_without_transition(self, srcs, masks, pos_embeds, ref_srcs, ref_masks, ref_pos_embeds, query_embed=None):
         assert self.two_stage or query_embed is not None
